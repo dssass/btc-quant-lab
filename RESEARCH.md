@@ -37,11 +37,12 @@
      **永遠不要修改 `strategies/hso.py`。**
 
 5. **實作 + 測試**
+   - 預設用 **4h**（使用者的 HSO 週期），除非出處明確指定別的週期。
    - 新檔放 `strategies/<slug>.py`，繼承 `strategies/base.py` 的 `Strategy`（看 `donchian.py` 當範例）。
    - 只用 `market.bars()`、`market.ltf_delta()`、`market.oi_close()` 拿資料，
      `on_bar(i)` 只能讀第 i 根以前。
    ```bash
-   python -m lab.trial strategies.<slug>:<Class> --tf 1h \
+   python -m lab.trial strategies.<slug>:<Class> --tf 4h \
        --source "<網址>" --note "<一句話說明>" --register
    ```
    `trial` 會自動做偷看未來檢查、IS/OOS 績效、門檻判定，結果寫進 `research/log.csv`。

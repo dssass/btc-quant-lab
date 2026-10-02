@@ -1,7 +1,7 @@
 # BTC Quant Lab
 
 每天早上自動：**上網找新策略 → 回測 → 通過門檻就凍結 → 用之後的新資料做模擬交易 → 出報告**。
-包含使用者的 HSO 策略（Hades × Swing × OrderFlow）的 Python 版。
+包含使用者的 HSO 策略（Hades × Swing × OrderFlow，4H、只做多）的 Python 版。
 
 > 僅供研究與模擬交易，不構成投資建議，不會下任何真單。
 
