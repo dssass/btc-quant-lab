@@ -5,12 +5,12 @@
     "class": "strategies.hso:HSO",
     "timeframe": "4h",
     "params": {
-      "mode": "Long only"
+      "mode": "Long+Short"
     },
     "source": "使用者提供的 Pine 腳本（依 Zekis 公開說明重建）",
-    "note": "使用者的主策略，原樣移植，不經門檻直接上架",
+    "note": "使用者的主策略，原樣移植，多空雙向，不經門檻直接上架",
     "frozen_at": "2026-10-02T00:00:00+00:00",
-    "code_sha": "6441806e2c45ca1b",
+    "code_sha": "5e9a326ff2e2a999",
     "status": "active"
   },
   {
@@ -18,11 +18,13 @@
     "name": "基準：Donchian 突破",
     "class": "strategies.donchian:DonchianTrend",
     "timeframe": "4h",
-    "params": {},
+    "params": {
+      "long_only": false
+    },
     "source": "經典海龜交易法則",
     "note": "對照組：簡單趨勢策略能做到多少",
     "frozen_at": "2026-10-02T00:00:00+00:00",
-    "code_sha": "2a2fc5f5e07f0c88",
+    "code_sha": "064163529af455e6",
     "status": "active"
   }
 ]
