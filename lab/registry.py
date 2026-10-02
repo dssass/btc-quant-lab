@@ -35,8 +35,14 @@ def instantiate(entry: dict):
 
 
 def code_sha(class_path: str, params: dict, timeframe: str) -> str:
+    """策略本身 + 它繼承的所有策略類別（例如 hso_v2 繼承 HSO）的原始碼 + 參數。"""
     cls = get_class(class_path)
-    src = inspect.getsource(inspect.getmodule(cls))
+    mods = []
+    for k in cls.__mro__:
+        m = inspect.getmodule(k)
+        if m is not None and m.__name__.startswith("strategies") and m not in mods:
+            mods.append(m)
+    src = "".join(inspect.getsource(m) for m in mods)
     blob = src + json.dumps(params, sort_keys=True) + timeframe
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 

@@ -22,4 +22,13 @@ GATE = {
     "max_oos_dd": 0.45,        # 最大回撤上限
 }
 
+# 改良版（例如 hso_v2）的門檻：要在 OOS 上「贏過原版」，而不是只有自己賺錢
+VARIANT_GATE = {
+    "min_oos_trades": 10,      # 濾網會減少交易，門檻放低但不能太少
+    "min_pf_gain": 0.10,       # OOS PF 至少比原版高 0.10
+    "min_avgR_gain": 0.0,      # OOS 平均 R 不能比原版差
+    "max_dd_worse": 0.05,      # OOS 最大回撤最多比原版差 5 個百分點
+    "min_is_pf": 1.0,          # IS 也不能變成虧錢策略
+}
+
 TIMEFRAMES = {"15m": "15min", "1h": "1h", "4h": "4h", "1d": "1D"}

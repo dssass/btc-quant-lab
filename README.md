@@ -1,6 +1,6 @@
 # BTC Quant Lab
 
-每天早上自動：**上網找新策略 → 回測 → 通過門檻就凍結 → 用之後的新資料做模擬交易 → 出報告**。
+每天早上自動：**診斷 HSO 的弱點 → 上網找改良點子 → 做成新版本回測 → 贏過原版才凍結上架 → 和原版並排模擬交易 → 出報告**。
 包含使用者的 HSO 策略（Hades × Swing × OrderFlow，4H、多空雙向）的 Python 版。
 
 > 僅供研究與模擬交易，不構成投資建議，不會下任何真單。
@@ -77,10 +77,12 @@ python tests/make_synthetic.py               # 產生合成資料，之後可加
 | `lab/engine.py` | 逐根回測引擎，行為對齊 Pine `process_orders_on_close` |
 | `lab/market.py` | 讀資料、轉週期、低週期 CVD、OI 對齊 |
 | `lab/causal.py` | 偷看未來檢查（截斷資料重跑，結果必須一致） |
-| `lab/trial.py` | 新策略試驗 + 上架門檻 |
+| `lab/trial.py` | 新策略／改良版試驗 + 上架門檻（`--baseline` 和原版比較） |
+| `lab/diagnose.py` | 策略弱點診斷（多空、出場原因、MFE、獲利回吐） |
 | `lab/evaluate.py` | 每日評估與報告 |
 | `lab/config.py` | 手續費、樣本切分、門檻 |
-| `strategies/hso.py` | HSO 的 Python 版 |
+| `strategies/hso.py` | HSO 的 Python 版（原版，永不修改） |
+| `strategies/hso_v*.py` | HSO 改良版，每個檔案繼承原版、只改一個點 |
 | `strategies/donchian.py` | 基準對照組 |
 | `strategies/registry.json` | 上架策略與凍結時間（凍結後程式碼不能改） |
 | `research/log.csv` | 所有測過的點子，包含失敗的 |
