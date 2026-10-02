@@ -1,0 +1,1 @@
+date,id,class,timeframe,params,source,note,causal_ok,is_return,is_trades,oos_return,oos_trades,oos_pf,oos_dd,oos_sharpe,oos_buy_hold,passed,registered,fail_reasons
