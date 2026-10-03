@@ -1,0 +1,43 @@
+name: universe-data
+
+# 一次性：抓跨幣種驗證用的 1 小時 K 線，存回 research/universe 分支（不動 main）
+on:
+  push:
+    branches: [research/universe]
+    paths: [research/fetch_universe.py, .github/workflows/universe.yml]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: universe-data
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch OKX 1h candles
+        run: python research/fetch_universe.py
+
+      - name: Commit data
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898231+github-actions[bot]@users.noreply.github.com"
+          git add data_universe
+          if git diff --cached --quiet; then
+            echo "沒有新資料"
+            exit 0
+          fi
+          git commit -m "data_universe: $(date -u +%Y-%m-%dT%H:%MZ)"
+          git pull --rebase origin research/universe
+          git push origin HEAD:research/universe
