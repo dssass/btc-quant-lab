@@ -1,7 +1,12 @@
 # 每日研究流程（給每天早上的 Claude 排程任務看）
 
-目標：**每天從網路找一個點子來改良使用者的 HSO 策略**，誠實地測試它；
-在樣本外確實贏過現行版本的改良版才上架，和原版並排做模擬交易，由使用者決定要不要採用。
+目標：**每天從網路找一個點子來改良使用者的 HSO 策略**，用「冠軍挑戰」的方式累積改良。
+
+三個版本：
+- **原版** `hso_v1`：使用者原本的腳本，永遠不動（`pine/HSO_original.pine`）
+- **修改版**（冠軍）：目前最好的改良版，registry 裡 `role = champion`；還沒有人贏過原版時 = 原版
+  （`pine/HSO_modified.pine`）
+- **今日挑戰者**：繼承修改版、只多改一個點。贏過修改版就取代它，輸了修改版保持不變。
 
 使用者是電機系研究生，寫過 Pine/Python 策略，報告用**繁體中文**，標題清楚、手機好讀。
 使用者的觀點：趨勢型系統不該用勝率當優化目標，看 R 倍數、期望值、Profit Factor。
@@ -25,11 +30,11 @@
    python -m lab.evaluate
    ```
 
-4. **診斷現行最佳 HSO 版本的弱點**
+4. **診斷目前修改版的弱點**
    ```bash
-   python -m lab.diagnose hso_v1      # 有更新版通過時，改診斷最新的那一版
+   python -m lab.diagnose <修改版 id>   # registry 裡 role = champion 的那個；沒有就用 hso_v1
    ```
-   看哪裡在虧：多 vs 空、哪種出場、MFE（進場後走不出去？）、獲利回吐、停損距離。
+   看哪裡在虧：多 vs 空、哪種出場、MFE（進場後走不出去？）、獲利回吐、停損距離、哪一年特別差。
    **選一個最明顯的弱點**當今天的目標。
 
 5. **上網找針對這個弱點的點子（一天只測一個）**
@@ -39,24 +44,30 @@
    - 參數**照原始出處**，出處沒給就用業界常見值，在 `--note` 寫理由。
      **禁止**為了過門檻而反覆調參數重測：一個點子一天只跑一組設定。
 
-6. **實作成新版本（不是改原檔）**
-   - 新檔 `strategies/hso_vN_<slug>.py`，**繼承** `HSO`（或繼承目前最佳版本），
-     只覆寫需要改的部分。範例：`strategies/hso_v2_adx.py`。
-   - 檔案開頭的 docstring 寫清楚：診斷到的弱點、改了什麼、出處網址。
-   - 版本號：每個新點子用下一個號碼（v2、v3、v4…），不管前一個有沒有通過。
-   - **永遠不要修改 `strategies/hso.py` 或任何已上架的策略檔**（code_sha 會檢查，繼承的父類別也算在內）。
+6. **實作挑戰者並對決**
+   - 新檔 `strategies/hso_vN_<slug>.py`，**繼承目前修改版的類別**（不是原版），只覆寫需要改的部分。
+     範例：`strategies/hso_v3_regime.py`。版本號每天 +1，不管前一個有沒有贏。
+   - 檔案開頭 docstring 寫清楚：診斷到的弱點、改了什麼、出處網址。
+   - **永遠不要修改 `strategies/hso.py` 或任何已上架的策略檔**（code_sha 會檢查，繼承的父類別也算）。
    ```bash
-   python -m lab.trial strategies.hso_vN_<slug>:<Class> --tf 4h \
-       --params '{"mode":"Long+Short"}' --baseline hso_v1 \
-       --source "<網址>" --note "<弱點> → <改法>" --register
+   python -m lab.duel strategies.hso_vN_<slug>:<Class> \
+       --params '{"新參數": 值}' --source "<網址>" --note "<弱點> → <改法>"
    ```
-   `trial --baseline` 會做偷看未來檢查，並用**改良版門檻**比較：
-   OOS PF 要比原版高 0.10 以上、平均 R 不能變差、回撤不能差超過 5 個百分點、IS 不能變成虧錢。
-   通過才會上架，和原版一起做前測。
+   `duel` 會自動：偷看未來檢查 → 原版 / 修改版 / 挑戰者三方比較 → 判定 → 更新 registry、
+   `research/log.csv`、`reports/duel.json`。
+   勝出條件：OOS PF 比修改版高 0.10 以上、平均 R 不變差、回撤不差超過 5 個百分點、IS PF ≥ 1，
+   而且 OOS 前半、後半段報酬都不能輸修改版超過 2%。
+
+   **挑戰者勝出時，一定要產出 Pine：**
+   - 以 `pine/HSO_modified.pine` 為底，把今天的改動翻成 Pine v6，寫回 `pine/HSO_modified.pine`
+   - 同一份複製到 `pine/history/<新 id>.pine`
+   - 檔頭註解加上這一版的改動與出處；`strategy()` 標題改成新版本號
+   - 只能用已收盤的資料（`request.security` 要搭配 `[1]` + `lookahead_on`），不能重繪
+   - 在報告裡附上和前一版的差異（`diff --strip-trailing-cr`），並提醒使用者到 TradingView 編譯確認
 
 7. **推回 GitHub**
    ```bash
-   git add strategies research reports lab
+   git add strategies research reports lab pine
    git commit -m "research: <日期> <版本 id> <通過/未通過>"
    git pull --rebase && git push
    ```
@@ -75,8 +86,8 @@
 - **凍結就是凍結。** 上架後的策略程式碼和參數不能改。要改就做新版本、新 id。
 - **前測（FWD）才是真的。** 改良版在 OOS 贏過原版只是入場券；前測也贏才值得建議使用者採用。
   前測少於 10 筆時，報告要明講「樣本不足，還不能下結論」。
-- **採用建議**：改良版前測 ≥ 15 筆，且前測 PF 和平均 R 都高於原版 → 在報告建議使用者把它改成主力版本，
-  之後的改良改以它為 baseline。由使用者決定。
+- **修改版的可信度**：修改版是在 OOS 上一路挑出來的，挑越多次越可能只是適應了 OOS。
+  所以報告要一直並列原版和修改版的**前測**；修改版前測 ≥ 15 筆後仍輸原版，要在報告提出警告。
 - **淘汰建議**：前測 ≥ 20 筆且 PF < 0.8，或前測最大回撤超過 OOS 的 1.5 倍 → 建議淘汰，
   由使用者決定（決定後把 registry 裡的 `status` 改成 `retired`）。
 - **失敗也要記錄。** 沒過門檻的點子照樣留在 log 和 strategies/ 裡，這是避免重複測試和自我欺騙的關鍵。

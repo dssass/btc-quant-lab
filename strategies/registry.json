@@ -11,7 +11,8 @@
     "note": "使用者的主策略，原樣移植，多空雙向，不經門檻直接上架",
     "frozen_at": "2026-10-02T00:00:00+00:00",
     "code_sha": "582afd26ef7efc26",
-    "status": "active"
+    "status": "active",
+    "role": "original"
   },
   {
     "id": "baseline_donchian",
@@ -25,6 +26,23 @@
     "note": "對照組：簡單趨勢策略能做到多少",
     "frozen_at": "2026-10-02T00:00:00+00:00",
     "code_sha": "2c57e2ea66f14565",
-    "status": "active"
+    "status": "active",
+    "role": "benchmark"
+  },
+  {
+    "id": "hso_v3_regime",
+    "name": "HSO v3（+ Faber 10 個月均線方向濾網）",
+    "class": "strategies.hso_v3_regime:HSORegime",
+    "timeframe": "4h",
+    "params": {
+      "mode": "Long+Short"
+    },
+    "source": "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=962461",
+    "note": "空單在長期多頭逆勢虧損（OOS 空單 -0.11R）→ Faber 10 個月均線方向濾網",
+    "frozen_at": "2026-10-03T01:45:00+00:00",
+    "code_sha": "7f8ad3dac859e032",
+    "status": "active",
+    "role": "champion",
+    "parent": "hso_v1"
   }
 ]

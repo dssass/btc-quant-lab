@@ -26,6 +26,8 @@ from .metrics import fmt_num, fmt_pct, segment
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPORTS = os.path.join(ROOT, "reports")
 TPE = timezone(timedelta(hours=8))
+ROLE = {"original": "原版", "champion": "修改版", "benchmark": "對照組"}
+ORDER = {"原版": 0, "修改版": 1, "對照組": 2}
 
 
 def _t(ts) -> str:
@@ -50,6 +52,7 @@ def evaluate(data_dir: str | None = None) -> dict:
         if e.get("status") != "active":
             continue
         row = {"id": e["id"], "name": e.get("name", e["id"]), "timeframe": e["timeframe"],
+               "role": ROLE.get(e.get("role", ""), e.get("role", "")),
                "frozen_at": _t(e["frozen_at"]), "source": e.get("source", "")}
         try:
             row["code_ok"] = registry.verify(e)
@@ -80,6 +83,13 @@ def evaluate(data_dir: str | None = None) -> dict:
         except Exception as ex:  # 一個策略壞掉不影響其他
             row["error"] = f"{type(ex).__name__}: {ex}"
         out["strategies"].append(row)
+    out["strategies"].sort(key=lambda s: ORDER.get(s.get("role"), 9))
+    if not any(s.get("role") == "修改版" for s in out["strategies"]):
+        out["note"] = "目前還沒有修改版贏過原版，修改版 = 原版"
+    duel = os.path.join(REPORTS, "duel.json")
+    if os.path.exists(duel):
+        with open(duel, encoding="utf-8") as fh:
+            out["latest_duel"] = json.load(fh)
     return out
 
 
@@ -89,20 +99,34 @@ def to_markdown(r: dict) -> str:
          f"｜距今 {r['data']['hours_since_last_bar']} 小時｜BTC {r['price']:,.0f}", ""]
     if r["data"]["hours_since_last_bar"] > 3:
         L += ["> ⚠️ 資料超過 3 小時沒更新，請檢查 GitHub Actions。", ""]
-    L += ["## 排行榜", "",
-          "| 策略 | 週期 | 前測報酬 | 前測交易 | OOS 報酬 | OOS PF | OOS 回撤 | 目前持倉 |",
+    L += ["## 原版 vs 修改版", "",
+          "| 角色 | 策略 | 前測報酬 | 前測交易 | OOS 報酬 | OOS PF | OOS 平均R | 目前持倉 |",
           "|---|---|---|---|---|---|---|---|"]
     rows = [s for s in r["strategies"] if "error" not in s]
-    rows.sort(key=lambda s: (s["FWD"].get("return") or 0), reverse=True)
     for s in rows:
         p = s["position"]
         pos = p["side"] if p["side"] == "空手" else f"{p['side']} @{p['entry_price']:,.0f}"
-        L.append(f"| {s['name']} | {s['timeframe']} | {fmt_pct(s['FWD'].get('return'))} | {s['FWD'].get('trades', 0)} "
+        L.append(f"| {s.get('role', '')} | {s['name']} | {fmt_pct(s['FWD'].get('return'))} | {s['FWD'].get('trades', 0)} "
                  f"| {fmt_pct(s['OOS'].get('return'))} | {fmt_num(s['OOS'].get('profit_factor'))} "
-                 f"| {fmt_pct(s['OOS'].get('max_dd'))} | {pos} |")
+                 f"| {fmt_num(s['OOS'].get('avg_R'))} | {pos} |")
     L.append("")
+    if r.get("note"):
+        L += [f"> {r['note']}", ""]
+    d = r.get("latest_duel")
+    if d:
+        c, k = d["challenger"], d["champion"]
+        L += [f"## 最近一次挑戰（{d['date']}）", "",
+              f"- 挑戰者：{c['name']}（`{c['id']}`）",
+              f"- 點子：{c.get('note', '')}｜出處：{c.get('source', '')}",
+              f"- 挑戰者 OOS：{fmt_pct(c['OOS'].get('return'))}｜PF {fmt_num(c['OOS'].get('profit_factor'))}"
+              f"｜平均 {fmt_num(c['OOS'].get('avg_R'))}R｜回撤 {fmt_pct(c['OOS'].get('max_dd'))}｜{c['OOS'].get('trades')} 筆",
+              f"- 當時的修改版（`{k['id']}`）OOS：{fmt_pct(k['OOS'].get('return'))}｜PF {fmt_num(k['OOS'].get('profit_factor'))}"
+              f"｜平均 {fmt_num(k['OOS'].get('avg_R'))}R｜回撤 {fmt_pct(k['OOS'].get('max_dd'))}",
+              f"- 結果：{'🏆 勝出，成為新的修改版' if d['won'] else '❌ 未勝出，修改版不變'}"]
+        L += [f"  - {x}" for x in d.get("fail_reasons", [])]
+        L.append("")
     for s in r["strategies"]:
-        L += [f"## {s['name']}（`{s['id']}`）", ""]
+        L += [f"## {s.get('role', '')}：{s['name']}（`{s['id']}`）", ""]
         if "error" in s:
             L += [f"❌ 執行失敗：{s['error']}", ""]
             continue

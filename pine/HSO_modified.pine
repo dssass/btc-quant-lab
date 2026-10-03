@@ -1,0 +1,1439 @@
+//@version=6
+// ============================================================================
+//  HSO 分析系統 = Hades 趨勢 × Swing 擺動停損 × 訂單流濾網
+//
+//  ① Hades：Active(120 WMA) vs Base(200 SMA) 決定大趨勢
+//            MA1(41 EMA) vs MA2(72 EMA) 決定進出場
+//            綠 = 做多、紅 = 做空、黃 = 出場
+//
+//  ② Swing：Donchian(20) 確認擺動高低點
+//            ATR Buffer = 0.3
+//
+//  ③ 訂單流濾網固定開啟
+//     Crypto：Spot CVD + Perp CVD + OI + Basis
+//     其他商品：本商品 CVD
+//
+//  ④ v3 新增：長期方向濾網（Faber 10 個月均線）
+//     前一根日 K 收盤 > 300 日 SMA → 只允許做多
+//     前一根日 K 收盤 < 300 日 SMA → 只允許做空
+//     出處：Faber (2007) SSRN 962461
+//
+//  ※ 修改版由 btc-quant-lab 自動產生（hso_v3_regime），原版見 HSO_original.pine
+//  ※ Python 回測用 OKX BTC-USDT-SWAP 4H、多空雙向
+//  ※ Zekis 腳本為閉源，此處依作者公開說明重建，並非原始碼
+//  ※ 僅供研究與回測，不構成投資建議
+// ============================================================================
+
+strategy(
+     "HSO v3 (Hades × Swing × OrderFlow × Regime)",
+     shorttitle = "HSO v3",
+     overlay = true,
+     initial_capital = 10000,
+     default_qty_type = strategy.percent_of_equity,
+     default_qty_value = 100,
+     commission_type = strategy.commission.percent,
+     commission_value = 0.05,
+     slippage = 2,
+     margin_long = 20,
+     margin_short = 20,
+     process_orders_on_close = true,
+     max_lines_count = 500,
+     max_labels_count = 500
+ )
+
+
+// ============================================================================
+//  使用者設定
+// ============================================================================
+
+grpM = "主要設定"
+
+stratMode = input.string(
+     "Long+Short",
+     "交易方向",
+     options = ["Long only", "Long+Short", "Short only"],
+     group = grpM
+ )
+
+fixedQty = input.float(
+     1,
+     "期貨固定口數",
+     minval = 0.001,
+     group = grpM,
+     tooltip = "只用在期貨。加密貨幣使用「屬性」中的訂單大小。"
+ )
+
+grpD = "顯示"
+
+showZZ = input.bool(
+     true,
+     "Buy / Sell 轉折",
+     group = grpD,
+     tooltip = "轉折確認後才出現。Buy 綠色 = RSI ≤ 30；Sell 紅色 = RSI ≥ 70。"
+ )
+
+showExits = input.bool(
+     true,
+     "平倉標記",
+     group = grpD
+ )
+
+showStops = input.bool(
+     false,
+     "停損線",
+     group = grpD
+ )
+
+dashMode = input.string(
+     "精簡",
+     "儀表板",
+     options = ["精簡", "完整", "關閉"],
+     group = grpD
+ )
+
+
+// ============================================================================
+//  固定參數
+// ============================================================================
+
+// Hades
+TREND_LEN = 120
+BASE_LEN  = 200
+MA1_LEN   = 41
+MA2_LEN   = 72
+
+// Swing
+DC_LEN  = 20
+ATR_BUF = 0.3
+
+// Order Flow
+FLOW_LEN    = 24
+OI_TH       = 0.5
+BASIS_Z_LEN = 200
+CROWD_Z     = 2.0
+MIN_SCORE   = 1
+
+// Regime（v3）
+REGIME_DAYS = 300
+
+
+// ============================================================================
+//  商品類型
+// ============================================================================
+
+isCrypto = syminfo.type == "crypto"
+isFut    = syminfo.type == "futures"
+
+float entryQty = isFut ? fixedQty : na
+
+
+// ============================================================================
+//  ① Hades
+// ============================================================================
+
+trendLine = ta.wma(close, TREND_LEN)
+baseLine  = ta.sma(close, BASE_LEN)
+ma1       = ta.ema(close, MA1_LEN)
+ma2       = ta.ema(close, MA2_LEN)
+
+// 1 = 綠區
+// 0 = 黃區
+// -1 = 紅區
+int zone =
+     trendLine > baseLine and ma1 > ma2 ? 1 :
+     trendLine < baseLine and ma1 < ma2 ? -1 :
+     0
+
+
+// ============================================================================
+//  ② Swing
+// ============================================================================
+
+dcHi = ta.highest(high, DC_LEN)[1]
+dcLo = ta.lowest(low, DC_LEN)[1]
+
+atr  = ta.atr(14)
+rsiV = ta.rsi(close, 14)
+
+var int   zzDir = 1
+
+var float extP = na
+var int   extB = na
+var float extR = na
+
+var float pivP = na
+var int   pivB = na
+
+var float swHi     = na
+var float swHiPrev = na
+
+var float swLo     = na
+var float swLoPrev = na
+
+newSwHi = false
+newSwLo = false
+
+
+// ============================================================================
+//  Swing High
+// ============================================================================
+
+if zzDir == 1
+
+    if na(extP) or high >= extP
+        extP := high
+        extB := bar_index
+        extR := rsiV
+
+    if not na(dcLo) and low < dcLo
+
+        swHiPrev := swHi
+        swHi     := extP
+
+        newSwHi := true
+
+        if showZZ
+
+            if not na(pivB)
+                line.new(
+                     pivB,
+                     pivP,
+                     extB,
+                     extP,
+                     color = color.new(#26a69a, 0),
+                     width = 2
+                 )
+
+            label.new(
+                 extB,
+                 extP,
+                 "Sell\nRSI " + str.tostring(extR, "#"),
+                 style = label.style_label_down,
+                 color = extR >= 70
+                     ? color.new(#ff1744, 0)
+                     : color.new(#434651, 0),
+                 textcolor = color.white,
+                 size = size.small
+             )
+
+        pivP := extP
+        pivB := extB
+
+        zzDir := -1
+
+        extP := low
+        extB := bar_index
+        extR := rsiV
+
+
+// ============================================================================
+//  Swing Low
+// ============================================================================
+
+else
+
+    if na(extP) or low <= extP
+        extP := low
+        extB := bar_index
+        extR := rsiV
+
+    if not na(dcHi) and high > dcHi
+
+        swLoPrev := swLo
+        swLo     := extP
+
+        newSwLo := true
+
+        if showZZ
+
+            if not na(pivB)
+                line.new(
+                     pivB,
+                     pivP,
+                     extB,
+                     extP,
+                     color = color.new(#ef5350, 0),
+                     width = 2
+                 )
+
+            label.new(
+                 extB,
+                 extP,
+                 "Buy\nRSI " + str.tostring(extR, "#"),
+                 style = label.style_label_up,
+                 color = extR <= 30
+                     ? color.new(#00c853, 0)
+                     : color.new(#434651, 0),
+                 textcolor = color.white,
+                 size = size.small
+             )
+
+        pivP := extP
+        pivB := extB
+
+        zzDir := 1
+
+        extP := high
+        extB := bar_index
+        extR := rsiV
+
+
+// ============================================================================
+//  Swing Structure
+// ============================================================================
+
+bool hh = not na(swHiPrev) and swHi > swHiPrev
+bool lh = not na(swHiPrev) and swHi < swHiPrev
+
+bool hl = not na(swLoPrev) and swLo > swLoPrev
+bool ll = not na(swLoPrev) and swLo < swLoPrev
+
+
+// ============================================================================
+//  ③ Order Flow
+// ============================================================================
+
+tfSec = timeframe.in_seconds()
+
+ltf =
+     tfSec <= 900   ? "1" :
+     tfSec <= 3600  ? "15" :
+     tfSec <= 14400 ? "60" :
+     tfSec <= 86400 ? "240" :
+     "D"
+
+
+// ============================================================================
+//  自動產生商品代號
+// ============================================================================
+
+baseTk = str.replace(
+     syminfo.ticker,
+     ".P",
+     ""
+ )
+
+spotUse =
+     isCrypto
+     ? syminfo.prefix + ":" + baseTk
+     : syminfo.tickerid
+
+perpUse =
+     isCrypto
+     ? syminfo.prefix + ":" + baseTk + ".P"
+     : syminfo.tickerid
+
+oiUse =
+     syminfo.prefix + ":" + baseTk + ".P_OI"
+
+
+// ============================================================================
+//  CVD
+// ============================================================================
+
+f_delta() =>
+    close > open
+     ? volume
+     : close < open
+     ? -volume
+     : 0.0
+
+
+float[] spotArr = request.security_lower_tf(
+     spotUse,
+     ltf,
+     f_delta(),
+     ignore_invalid_symbol = true
+ )
+
+float[] perpArr = request.security_lower_tf(
+     perpUse,
+     ltf,
+     f_delta(),
+     ignore_invalid_symbol = true
+ )
+
+
+spotDelta =
+     spotArr.size() > 0
+     ? spotArr.sum()
+     : 0.0
+
+perpDelta =
+     perpArr.size() > 0
+     ? perpArr.sum()
+     : 0.0
+
+
+spotCvdN = math.sum(
+     spotDelta,
+     FLOW_LEN
+ )
+
+perpCvdN = math.sum(
+     perpDelta,
+     FLOW_LEN
+ )
+
+
+// ============================================================================
+//  OI
+// ============================================================================
+
+oiRaw = request.security(
+     oiUse,
+     timeframe.period,
+     close,
+     ignore_invalid_symbol = true
+ )
+
+oi =
+     isCrypto
+     ? oiRaw
+     : na
+
+
+oiChgPct =
+     (oi / oi[FLOW_LEN] - 1) * 100
+
+priceChgPct =
+     (close / close[FLOW_LEN] - 1) * 100
+
+
+// ============================================================================
+//  資料缺漏
+// ============================================================================
+
+var int flowBars  = 0
+var int oiNaBars  = 0
+var int cvdNaBars = 0
+
+flowBars += 1
+
+
+if isCrypto and na(oiRaw)
+    oiNaBars += 1
+
+
+if perpArr.size() == 0 or
+   (isCrypto and spotArr.size() == 0)
+
+    cvdNaBars += 1
+
+
+oiNaPct =
+     float(oiNaBars) /
+     flowBars *
+     100
+
+
+cvdNaPct =
+     float(cvdNaBars) /
+     flowBars *
+     100
+
+
+// ============================================================================
+//  Basis
+// ============================================================================
+
+spotC = request.security(
+     spotUse,
+     timeframe.period,
+     close,
+     ignore_invalid_symbol = true
+ )
+
+perpC = request.security(
+     perpUse,
+     timeframe.period,
+     close,
+     ignore_invalid_symbol = true
+ )
+
+
+basis =
+     (perpC / spotC - 1) * 100
+
+
+basisMean =
+     ta.sma(
+         basis,
+         BASIS_Z_LEN
+     )
+
+
+basisSd =
+     ta.stdev(
+         basis,
+         BASIS_Z_LEN
+     )
+
+
+basisZ =
+     isCrypto and basisSd > 0
+     ? (basis - basisMean) / basisSd
+     : 0.0
+
+
+// ============================================================================
+//  OI Regime
+//
+//  2 = 價漲 OI 增
+//  1 = 價漲 OI 減
+// -2 = 價跌 OI 增
+// -1 = 價跌 OI 減
+// ============================================================================
+
+int oiRegime =
+     na(oiChgPct)
+     ? 0
+     : priceChgPct > 0 and oiChgPct > OI_TH
+     ? 2
+     : priceChgPct > 0 and oiChgPct < -OI_TH
+     ? 1
+     : priceChgPct < 0 and oiChgPct > OI_TH
+     ? -2
+     : priceChgPct < 0 and oiChgPct < -OI_TH
+     ? -1
+     : 0
+
+
+// ============================================================================
+//  Order Flow Score
+// ============================================================================
+
+float scoreCrypto =
+     math.sign(spotCvdN) +
+     math.sign(perpCvdN) +
+     (
+         oiRegime == 2
+         ? 1
+         : oiRegime == -2
+         ? -1
+         : 0
+     ) +
+     (
+         basisZ > CROWD_Z
+         ? -1
+         : basisZ < -CROWD_Z
+         ? 1
+         : 0
+     )
+
+
+float flowScore =
+     nz(
+         isCrypto
+         ? scoreCrypto
+         : math.sign(perpCvdN)
+     )
+
+
+crowdLong =
+     isCrypto and
+     basisZ > CROWD_Z
+
+
+crowdShort =
+     isCrypto and
+     basisZ < -CROWD_Z
+
+
+flowOkLong =
+     flowScore >= MIN_SCORE and
+     not crowdLong
+
+
+flowOkShort =
+     -flowScore >= MIN_SCORE and
+     not crowdShort
+
+
+// ============================================================================
+//  ④ 長期方向濾網（v3）
+//  只用「已收盤」的日 K：close[1] / sma[1] + lookahead_on，不會重繪
+// ============================================================================
+
+dClose = request.security(
+     syminfo.tickerid,
+     "D",
+     close[1],
+     lookahead = barmerge.lookahead_on
+ )
+
+dSma = request.security(
+     syminfo.tickerid,
+     "D",
+     ta.sma(close, REGIME_DAYS)[1],
+     lookahead = barmerge.lookahead_on
+ )
+
+bullRegime = not na(dSma) and dClose > dSma
+bearRegime = not na(dSma) and dClose < dSma
+
+flowOkLong  := flowOkLong and bullRegime
+flowOkShort := flowOkShort and bearRegime
+
+
+// ============================================================================
+//  進出場
+// ============================================================================
+
+var bool  zoneUsed  = false
+var float longStop  = na
+var float shortStop = na
+
+
+if zone != zone[1]
+    zoneUsed := false
+
+
+// ============================================================================
+//  交易方向
+// ============================================================================
+
+allowLong =
+     stratMode != "Short only"
+
+allowShort =
+     stratMode != "Long only"
+
+
+// ============================================================================
+//  Entry Condition
+// ============================================================================
+
+longCond =
+     allowLong and
+     zone == 1 and
+     not zoneUsed and
+     strategy.position_size <= 0 and
+     flowOkLong
+
+
+shortCond =
+     allowShort and
+     zone == -1 and
+     not zoneUsed and
+     strategy.position_size >= 0 and
+     flowOkShort
+
+
+// ============================================================================
+//  Stop Calculation
+// ============================================================================
+
+longStopCalc =
+     na(swLo) or swLo >= close
+     ? close - 2 * atr
+     : swLo - ATR_BUF * atr
+
+
+shortStopCalc =
+     na(swHi) or swHi <= close
+     ? close + 2 * atr
+     : swHi + ATR_BUF * atr
+
+
+// ============================================================================
+//  Long Entry
+// ============================================================================
+
+if longCond
+
+    longStop := longStopCalc
+
+    strategy.entry(
+         "L",
+         strategy.long,
+         qty = entryQty,
+         comment = "做多"
+     )
+
+    strategy.exit(
+         "L-SL",
+         "L",
+         stop = longStop,
+         comment = "停損"
+     )
+
+    zoneUsed := true
+
+    alert(
+         "HSO 做多｜" +
+         syminfo.ticker +
+         " @ " +
+         str.tostring(close, format.mintick) +
+         "｜停損 " +
+         str.tostring(longStop, format.mintick),
+         alert.freq_once_per_bar_close
+     )
+
+
+// ============================================================================
+//  Short Entry
+// ============================================================================
+
+if shortCond
+
+    shortStop := shortStopCalc
+
+    strategy.entry(
+         "S",
+         strategy.short,
+         qty = entryQty,
+         comment = "做空"
+     )
+
+    strategy.exit(
+         "S-SL",
+         "S",
+         stop = shortStop,
+         comment = "停損"
+     )
+
+    zoneUsed := true
+
+    alert(
+         "HSO 做空｜" +
+         syminfo.ticker +
+         " @ " +
+         str.tostring(close, format.mintick) +
+         "｜停損 " +
+         str.tostring(shortStop, format.mintick),
+         alert.freq_once_per_bar_close
+     )
+
+
+// ============================================================================
+//  Long Trailing Stop
+// ============================================================================
+
+if strategy.position_size > 0 and newSwLo
+
+    newLS =
+         math.max(
+             nz(
+                 longStop,
+                 swLo - ATR_BUF * atr
+             ),
+             swLo - ATR_BUF * atr
+         )
+
+    if newLS > nz(longStop)
+
+        alert(
+             "HSO 停損上移｜" +
+             syminfo.ticker +
+             "｜新停損 " +
+             str.tostring(newLS, format.mintick),
+             alert.freq_once_per_bar_close
+         )
+
+    longStop := newLS
+
+
+// ============================================================================
+//  Short Trailing Stop
+// ============================================================================
+
+if strategy.position_size < 0 and newSwHi
+
+    newSS =
+         math.min(
+             nz(
+                 shortStop,
+                 swHi + ATR_BUF * atr
+             ),
+             swHi + ATR_BUF * atr
+         )
+
+    if newSS < nz(shortStop, 1e12)
+
+        alert(
+             "HSO 停損下移｜" +
+             syminfo.ticker +
+             "｜新停損 " +
+             str.tostring(newSS, format.mintick),
+             alert.freq_once_per_bar_close
+         )
+
+    shortStop := newSS
+
+
+// ============================================================================
+//  Hades Exit
+// ============================================================================
+
+exitLongNow =
+     strategy.position_size > 0 and
+     zone != 1
+
+
+exitShortNow =
+     strategy.position_size < 0 and
+     zone != -1
+
+
+if strategy.position_size > 0
+
+    if exitLongNow
+
+        strategy.close(
+             "L",
+             comment = "平多"
+         )
+
+        alert(
+             "HSO 平多｜" +
+             syminfo.ticker +
+             " @ " +
+             str.tostring(close, format.mintick),
+             alert.freq_once_per_bar_close
+         )
+
+    else
+
+        strategy.exit(
+             "L-SL",
+             "L",
+             stop = longStop,
+             comment = "停損"
+         )
+
+
+if strategy.position_size < 0
+
+    if exitShortNow
+
+        strategy.close(
+             "S",
+             comment = "平空"
+         )
+
+        alert(
+             "HSO 平空｜" +
+             syminfo.ticker +
+             " @ " +
+             str.tostring(close, format.mintick),
+             alert.freq_once_per_bar_close
+         )
+
+    else
+
+        strategy.exit(
+             "S-SL",
+             "S",
+             stop = shortStop,
+             comment = "停損"
+         )
+
+
+// ============================================================================
+//  平倉標記
+// ============================================================================
+
+if showExits and
+   strategy.closedtrades > strategy.closedtrades[1]
+
+    for i = strategy.closedtrades[1] to strategy.closedtrades - 1
+
+        exBar =
+             strategy.closedtrades.exit_bar_index(i)
+
+        exPx =
+             strategy.closedtrades.exit_price(i)
+
+        exTxt =
+             strategy.closedtrades.exit_comment(i)
+
+        exPct =
+             strategy.closedtrades.profit_percent(i)
+
+        isLong =
+             strategy.closedtrades.size(i) > 0
+
+
+        label.new(
+             exBar,
+             exPx,
+             exTxt +
+             "\n" +
+             (exPct >= 0 ? "+" : "") +
+             str.tostring(exPct, "#.##") +
+             "%",
+             style =
+                 isLong
+                 ? label.style_label_down
+                 : label.style_label_up,
+             color =
+                 exPct >= 0
+                 ? color.new(#089981, 0)
+                 : color.new(#f23645, 0),
+             textcolor = color.white,
+             size = size.small
+         )
+
+
+// ============================================================================
+//  停損線
+// ============================================================================
+
+plot(
+     showStops and strategy.position_size > 0
+     ? longStop
+     : na,
+     "多單停損",
+     color = color.new(#ff9800, 0),
+     style = plot.style_linebr
+ )
+
+
+plot(
+     showStops and strategy.position_size < 0
+     ? shortStop
+     : na,
+     "空單停損",
+     color = color.new(#ff9800, 0),
+     style = plot.style_linebr
+ )
+
+
+// ============================================================================
+//  Dashboard Functions
+// ============================================================================
+
+f_fmt(float x, string fmt) =>
+
+    na(x)
+     ? "—"
+     : str.tostring(x, fmt)
+
+
+f_row(
+     table t,
+     int r,
+     string k,
+     string v,
+     color c
+ ) =>
+
+    table.cell(
+         t,
+         0,
+         r,
+         k,
+         text_color = color.new(#b2b5be, 0),
+         text_size = size.small,
+         text_halign = text.align_left
+     )
+
+    table.cell(
+         t,
+         1,
+         r,
+         v,
+         text_color = c,
+         text_size = size.small,
+         text_halign = text.align_right
+     )
+
+
+// ============================================================================
+//  Dashboard
+//
+//  固定右下角
+// ============================================================================
+
+var table dash =
+     table.new(
+         position.bottom_right,
+         2,
+         17,
+         bgcolor = color.new(#131722, 5),
+         border_width = 1,
+         border_color = color.new(#363a45, 0)
+     )
+
+
+if dashMode != "關閉" and
+   (barstate.islast or barstate.islastconfirmedhistory)
+
+    table.clear(
+         dash,
+         0,
+         0,
+         1,
+         16
+     )
+
+
+    cG = color.new(#26a69a, 0)
+    cR = color.new(#ef5350, 0)
+    cY = color.new(#f5c542, 0)
+    cW = color.new(#d1d4dc, 0)
+
+
+    // ========================================================================
+    // Position
+    // ========================================================================
+
+    posTxt =
+         strategy.position_size > 0
+         ? "多單中 @" +
+           str.tostring(
+               strategy.position_avg_price,
+               format.mintick
+           )
+         : strategy.position_size < 0
+         ? "空單中 @" +
+           str.tostring(
+               strategy.position_avg_price,
+               format.mintick
+           )
+         : "空手"
+
+
+    posCol =
+         strategy.position_size > 0
+         ? cG
+         : strategy.position_size < 0
+         ? cR
+         : cW
+
+
+    stopV =
+         strategy.position_size > 0
+         ? longStop
+         : strategy.position_size < 0
+         ? shortStop
+         : na
+
+
+    // ========================================================================
+    // Status
+    // ========================================================================
+
+    waitTxt =
+         strategy.position_size != 0
+         ? "持有中，黃區或停損出場"
+         : zone == 0
+         ? "黃區：等趨勢成形"
+         : zoneUsed
+         ? "本區間已交易過，等下一個區間"
+         : zone == 1 and not allowLong
+         ? "只做空模式，不做多"
+         : zone == -1 and not allowShort
+         ? "只做多模式，不做空"
+         : zone == 1 and not bullRegime
+         ? "長期偏空（300 日均線下），不做多"
+         : zone == -1 and not bearRegime
+         ? "長期偏多（300 日均線上），不做空"
+         : zone == 1 and not flowOkLong
+         ? "等訂單流轉強"
+         : zone == -1 and not flowOkShort
+         ? "等訂單流轉弱"
+         : "條件齊全"
+
+
+    cfgTxt =
+         (
+             stratMode == "Long+Short"
+             ? "多空"
+             : stratMode == "Long only"
+             ? "只多"
+             : "只空"
+         ) +
+         "｜" +
+         (
+             isCrypto
+             ? "訂單流 4 項"
+             : "本商品 CVD"
+         ) +
+         "｜" +
+         (
+             isFut
+             ? str.tostring(fixedQty) + " 口"
+             : "權益 %"
+         )
+
+
+    // ========================================================================
+    // Basic Dashboard
+    // ========================================================================
+
+    table.cell(
+         dash,
+         0,
+         0,
+         "HSO",
+         text_color = cW,
+         text_size = size.normal
+     )
+
+
+    table.cell(
+         dash,
+         1,
+         0,
+         syminfo.ticker +
+         " · " +
+         timeframe.period,
+         text_color = cW,
+         text_size = size.small
+     )
+
+
+    f_row(
+         dash,
+         1,
+         "持倉",
+         posTxt,
+         posCol
+     )
+
+
+    f_row(
+         dash,
+         2,
+         "停損",
+         f_fmt(stopV, format.mintick),
+         color.new(#ff9800, 0)
+     )
+
+
+    f_row(
+         dash,
+         3,
+         "狀態",
+         waitTxt,
+         cY
+     )
+
+
+    f_row(
+         dash,
+         4,
+         "設定",
+         cfgTxt,
+         color.new(#9598a1, 0)
+     )
+
+
+    // ========================================================================
+    // Missing Data
+    // ========================================================================
+
+    if oiNaPct > 1 or
+       cvdNaPct > 1
+
+        f_row(
+             dash,
+             5,
+             "⚠ 資料缺漏",
+             "OI " +
+             str.tostring(oiNaPct, "#") +
+             "%｜CVD " +
+             str.tostring(cvdNaPct, "#") +
+             "%",
+             cY
+         )
+
+
+    // ========================================================================
+    // Full Dashboard
+    // ========================================================================
+
+    if dashMode == "完整"
+
+        zoneTxt =
+             zone == 1
+             ? "綠區"
+             : zone == -1
+             ? "紅區"
+             : "黃區"
+
+
+        zoneCol =
+             zone == 1
+             ? cG
+             : zone == -1
+             ? cR
+             : cY
+
+
+        structTxt =
+             (
+                 hh
+                 ? "HH"
+                 : lh
+                 ? "LH"
+                 : "—"
+             ) +
+             " / " +
+             (
+                 hl
+                 ? "HL"
+                 : ll
+                 ? "LL"
+                 : "—"
+             )
+
+
+        structCol =
+             (hh or hl) and
+             not (lh or ll)
+             ? cG
+             : (lh or ll) and
+               not (hh or hl)
+             ? cR
+             : cY
+
+
+        f_row(
+             dash,
+             6,
+             "Hades 區間",
+             zoneTxt,
+             zoneCol
+         )
+
+
+        f_row(
+             dash,
+             7,
+             "擺動結構",
+             structTxt,
+             structCol
+         )
+
+
+        f_row(
+             dash,
+             8,
+             "前高｜前低",
+             f_fmt(
+                 swHi,
+                 format.mintick
+             ) +
+             "｜" +
+             f_fmt(
+                 swLo,
+                 format.mintick
+             ),
+             cW
+         )
+
+
+        // ====================================================================
+        // Crypto
+        // ====================================================================
+
+        if isCrypto
+
+            cvdTxt =
+                 spotCvdN > 0 and
+                 perpCvdN > 0
+                 ? "現貨＋合約同步買"
+                 : spotCvdN < 0 and
+                   perpCvdN < 0
+                 ? "現貨＋合約同步賣"
+                 : spotCvdN > 0 and
+                   perpCvdN < 0
+                 ? "現貨吸籌、合約偏空"
+                 : spotCvdN < 0 and
+                   perpCvdN > 0
+                 ? "合約推動（脆弱）"
+                 : "中性"
+
+
+            cvdCol =
+                 spotCvdN > 0 and
+                 perpCvdN > 0
+                 ? cG
+                 : spotCvdN < 0 and
+                   perpCvdN < 0
+                 ? cR
+                 : cY
+
+
+            oiTxt =
+                 na(oi)
+                 ? "無 OI 資料"
+                 : oiRegime == 2
+                 ? "新多進場"
+                 : oiRegime == 1
+                 ? "空頭回補"
+                 : oiRegime == -2
+                 ? "新空進場"
+                 : oiRegime == -1
+                 ? "多頭平倉"
+                 : "中性"
+
+
+            oiCol =
+                 oiRegime == 2
+                 ? cG
+                 : oiRegime == -2
+                 ? cR
+                 : cY
+
+
+            crowdTxt =
+                 crowdLong
+                 ? "多方擁擠"
+                 : crowdShort
+                 ? "空方擁擠"
+                 : "正常"
+
+
+            crowdCol =
+                 crowdLong
+                 ? cR
+                 : crowdShort
+                 ? cG
+                 : cW
+
+
+            f_row(
+                 dash,
+                 9,
+                 "現貨 CVD",
+                 f_fmt(spotCvdN, format.volume),
+                 spotCvdN > 0 ? cG : cR
+             )
+
+
+            f_row(
+                 dash,
+                 10,
+                 "合約 CVD",
+                 f_fmt(perpCvdN, format.volume),
+                 perpCvdN > 0 ? cG : cR
+             )
+
+
+            f_row(
+                 dash,
+                 11,
+                 "CVD 解讀",
+                 cvdTxt,
+                 cvdCol
+             )
+
+
+            f_row(
+                 dash,
+                 12,
+                 "OI｜價格變化",
+                 f_fmt(
+                     oiChgPct,
+                     "#.##"
+                 ) +
+                 "%｜" +
+                 f_fmt(
+                     priceChgPct,
+                     "#.##"
+                 ) +
+                 "%",
+                 cW
+             )
+
+
+            f_row(
+                 dash,
+                 13,
+                 "OI 解讀",
+                 oiTxt,
+                 oiCol
+             )
+
+
+            f_row(
+                 dash,
+                 14,
+                 "擁擠度",
+                 crowdTxt,
+                 crowdCol
+             )
+
+
+            f_row(
+                 dash,
+                 15,
+                 "訂單流分數",
+                 str.tostring(
+                     flowScore,
+                     "#"
+                 ) +
+                 " / 4",
+                 flowScore > 0
+                 ? cG
+                 : flowScore < 0
+                 ? cR
+                 : cY
+             )
+
+
+            table.cell(
+                 dash,
+                 0,
+                 16,
+                 "使用代號",
+                 text_color = color.new(#b2b5be, 0),
+                 text_size = size.tiny,
+                 text_halign = text.align_left
+             )
+
+
+            table.cell(
+                 dash,
+                 1,
+                 16,
+                 spotUse +
+                 "｜" +
+                 perpUse +
+                 "｜" +
+                 oiUse,
+                 text_color = color.new(#9598a1, 0),
+                 text_size = size.tiny,
+                 text_halign = text.align_right
+             )
+
+
+        // ====================================================================
+        // Futures / Other
+        // ====================================================================
+
+        else
+
+            f_row(
+                 dash,
+                 9,
+                 "本商品 CVD",
+                 f_fmt(
+                     perpCvdN,
+                     format.volume
+                 ),
+                 perpCvdN > 0
+                 ? cG
+                 : cR
+             )
+
+
+            f_row(
+                 dash,
+                 10,
+                 "訂單流分數",
+                 str.tostring(
+                     flowScore,
+                     "#"
+                 ) +
+                 " / 1",
+                 flowScore > 0
+                 ? cG
+                 : flowScore < 0
+                 ? cR
+                 : cY
+             )

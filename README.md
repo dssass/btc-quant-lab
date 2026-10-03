@@ -1,6 +1,6 @@
 # BTC Quant Lab
 
-每天早上自動：**診斷 HSO 的弱點 → 上網找改良點子 → 做成新版本回測 → 贏過原版才凍結上架 → 和原版並排模擬交易 → 出報告**。
+每天早上自動：**診斷修改版的弱點 → 上網找改良點子 → 今日挑戰者 vs 修改版 vs 原版 三方對決 → 贏了就取代修改版（含 Pine 腳本）→ 模擬交易 → 出報告**。
 包含使用者的 HSO 策略（Hades × Swing × OrderFlow，4H、多空雙向）的 Python 版。
 
 > 僅供研究與模擬交易，不構成投資建議，不會下任何真單。
@@ -78,6 +78,7 @@ python tests/make_synthetic.py               # 產生合成資料，之後可加
 | `lab/market.py` | 讀資料、轉週期、低週期 CVD、OI 對齊 |
 | `lab/causal.py` | 偷看未來檢查（截斷資料重跑，結果必須一致） |
 | `lab/trial.py` | 新策略／改良版試驗 + 上架門檻（`--baseline` 和原版比較） |
+| `lab/duel.py` | 冠軍挑戰：原版 / 修改版 / 今日挑戰者三方比較，勝者取代修改版 |
 | `lab/diagnose.py` | 策略弱點診斷（多空、出場原因、MFE、獲利回吐） |
 | `lab/evaluate.py` | 每日評估與報告 |
 | `lab/config.py` | 手續費、樣本切分、門檻 |
@@ -86,6 +87,9 @@ python tests/make_synthetic.py               # 產生合成資料，之後可加
 | `strategies/donchian.py` | 基準對照組 |
 | `strategies/registry.json` | 上架策略與凍結時間（凍結後程式碼不能改） |
 | `research/log.csv` | 所有測過的點子，包含失敗的 |
+| `pine/HSO_original.pine` | 原版 Pine 腳本（不動） |
+| `pine/HSO_modified.pine` | 目前修改版的 Pine 腳本，可直接貼到 TradingView |
+| `pine/history/` | 每一個曾經勝出的版本 |
 | `RESEARCH.md` | 每日研究流程與規則 |
 
 ## HSO Python 版和 TradingView 的差異
